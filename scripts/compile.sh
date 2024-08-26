@@ -122,7 +122,7 @@ build_llvm() {
         local mlir_ext_dir="$EXTERNALS_DIR/mlir-extensions"
         if ! [ -d "$mlir_ext_dir" ]; then
             cd "$EXTERNALS_DIR"
-            git clone https://github.com/Menooker/mlir-extensions.git
+            git clone https://github.com/dchigarev/mlir-extensions.git
             cd "$mlir_ext_dir"
         else
             cd "$mlir_ext_dir"

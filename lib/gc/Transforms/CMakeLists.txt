@@ -9,6 +9,24 @@ gc_set_mlir_link_components(MLIR_LINK_COMPONENTS
 get_property(mlir_dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(mlir_conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
+if(GC_ENABLE_IMEX)
+  include(imex)
+  set(MY_TEST_IMEX
+      IMEXGPUXDialect
+      IMEXXeTileDialect
+      IMEXRegionDialect
+      IMEXRegionTransforms
+      IMEXTransforms
+      IMEXGPUToGPUX
+      IMEXGPUToSPIRV
+      IMEXGPUXToLLVM
+      IMEXXeGPUToVC
+      IMEXXeTileToXeGPU
+      IMEXUtil
+    )
+  set_property(GLOBAL APPEND PROPERTY IMEX_THING ${MY_TEST_IMEX})
+endif()
+
 gc_add_mlir_library(GcPasses
   MemRefToCPURuntime.cpp
   OneDNNGraphToLinalg.cpp
@@ -32,9 +50,39 @@ gc_add_mlir_library(GcPasses
     ${mlir_conversion_libs}
     ${MLIR_LINK_COMPONENTS}
     ${GC_ONEDNN_DIALECT_LIB_NAME}
-    GcInterface
+    GcInterface 
+    GcGpuPasses
+    IMEXGPUXDialect
+    IMEXXeTileDialect
+    IMEXRegionDialect
+    IMEXRegionTransforms
+    IMEXTransforms
+    IMEXGPUToGPUX
+    IMEXGPUToSPIRV
+    IMEXGPUXToLLVM
+    IMEXXeGPUToVC
+    IMEXXeTileToXeGPU
+    IMEXUtil
   )
 
 if(GC_ENABLE_IMEX)
   add_subdirectory(GPU)
+  include(imex)
+  get_property(IMEX_INCLUDES GLOBAL PROPERTY IMEX_INCLUDES)
+  target_include_directories(GcPasses PRIVATE ${IMEX_INCLUDES})
+  # target_link_libraries(GcPasses PRIVATE
+  #   GcGpuPasses
+  #   IMEXGPUXDialect
+  #   IMEXXeTileDialect
+  #   IMEXRegionDialect
+  #   IMEXRegionTransforms
+  #   IMEXTransforms
+  #   IMEXGPUToGPUX
+  #   IMEXGPUToSPIRV
+  #   IMEXGPUXToLLVM
+  #   IMEXXeGPUToVC
+  #   IMEXXeTileToXeGPU
+  #   IMEXUtil
+  # )
 endif()
+
