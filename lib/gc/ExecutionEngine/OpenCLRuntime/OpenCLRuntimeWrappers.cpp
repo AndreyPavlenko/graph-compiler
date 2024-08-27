@@ -167,6 +167,14 @@ static cl_device_id getDevice(cl_device_type *devtype) {
       CL_SAFE_CALL(clGetDeviceInfo(device, CL_DEVICE_VENDOR_ID, sizeof(cl_uint),
                                    &uintValue, nullptr));
       if (uintValue == 0x8086) { // Make sure this is an Intel device
+#ifndef _NDEBUG
+        CL_SAFE_CALL(
+            clGetDeviceInfo(device, CL_DEVICE_NAME, 0, nullptr, &valueSize));
+        name.resize(valueSize);
+        CL_SAFE_CALL(clGetDeviceInfo(device, CL_DEVICE_NAME, valueSize,
+                                     &name[0], nullptr));
+        fprintf(stdout, "[ INFO ] Using OpenCL device: %s\n", name.c_str());
+#endif
         return device;
       }
     }

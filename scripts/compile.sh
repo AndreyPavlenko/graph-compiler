@@ -117,10 +117,11 @@ build_llvm() {
 
     if [ "$ENABLE_IMEX" = "true" ]; then
         # clone IMEX and apply patches
-        local mlir_ext_dir="$EXTERNALS_DIR/mlir-extensions"
+        local mlir_ext_dir="$EXTERNALS_DIR/imex-src"
         if ! [ -d "$mlir_ext_dir" ]; then
             cd "$EXTERNALS_DIR"
-            git clone https://github.com/Menooker/mlir-extensions.git
+            local imex_url="$(grep -F 'set(IMEX_URL ' "$PROJECT_DIR/cmake/imex.cmake" | awk '{print $2}' | tr -d ')')"
+            git clone "$imex_url" "$mlir_ext_dir"
             cd "$mlir_ext_dir"
         else
             cd "$mlir_ext_dir"

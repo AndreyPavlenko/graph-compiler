@@ -24,6 +24,21 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/Passes.h"
+#include <iostream>
+
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
+#include "mlir/Dialect/SPIRV/Transforms/Passes.h"
+
+#ifdef GC_USE_IMEX
+#include <imex/Conversion/Passes.h>
+#include <imex/Transforms/Passes.h>
+#endif
+
+#include <cstdlib>  // For std::getenv
+#include <string>
+#include <algorithm> // For std::transform
+#include <iostream>  // For std::cout
 
 #include "gc/Dialect/CPURuntime/Transforms/CPURuntimePasses.h"
 #include "gc/Dialect/Linalgx/LinalgxDialect.h"
@@ -34,9 +49,27 @@
 
 namespace mlir::gc {
 
+
 void populateCleanUpPasses(mlir::OpPassManager &pm) {
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
+}
+
+bool getBoolFromEnv(const std::string& envVarName, bool defaultValue = false) {
+    const char* envValue = std::getenv(envVarName.c_str());
+
+    // If the environment variable is not set, return false by default
+    if (envValue == nullptr) {
+        return defaultValue;
+    }
+
+    std::string valueStr(envValue);
+    
+    // Convert the string to lower case for comparison
+    std::transform(valueStr.begin(), valueStr.end(), valueStr.begin(), ::tolower);
+
+    // Check for various representations of "true"
+    return (valueStr == "1" || valueStr == "true" || valueStr == "yes" || valueStr == "on");
 }
 
 // linalg + linalgX + tensor
@@ -182,10 +215,108 @@ void populateCPUPipeline(mlir::OpPassManager &pm) {
   populateLLVMPasses(pm);
 }
 
+static ArrayRef<int64_t> tile{8, 16, 16};
+
+void populateGPUPipeline(mlir::OpPassManager &pm) {
+  IterativeTilingAndFusionOptions tilingOpts;
+  std::string wtf = "matmul:{16,16}";
+  tilingOpts.defaultTileSize = wtf;
+  pm.addNestedPass<func::FuncOp>(createIterativeTilingAndFusion(tilingOpts));
+
+  pm.addPass(bufferization::createEmptyTensorEliminationPass());
+  pm.addPass(bufferization::createEmptyTensorToAllocTensorPass());
+
+  bufferization::OneShotBufferizationOptions options;
+  options.bufferizeFunctionBoundaries = true;
+  options.setFunctionBoundaryTypeConversion(
+      bufferization::LayoutMapOption::IdentityLayoutMap);
+  pm.addPass(bufferization::createOneShotBufferizePass(options));
+
+  pm.addPass(bufferization::createDropEquivalentBufferResultsPass());
+  pm.addNestedPass<func::FuncOp>(bufferization::createFinalizingBufferizePass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(bufferization::createDropEquivalentBufferResultsPass());
+  pm.addPass(memref::createExpandReallocPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(bufferization::createOwnershipBasedBufferDeallocationPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(bufferization::createBufferDeallocationSimplificationPass());
+  pm.addPass(bufferization::createLowerDeallocationsPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createBufferizationToMemRefPass());
+
+  pm.addNestedPass<func::FuncOp>(createForallToParallelLoopPass());
+  std::array<int64_t, 3> data = {8, 16, 16};
+  ArrayRef<int64_t> tile(data);
+  // for (int64_t val : tile) {
+  //     std::cout << val << " ";
+  // }
+  // std::cout << std::endl;
+  LinalgToXeGPUOptions opts{16, 1, tile};
+  pm.addNestedPass<func::FuncOp>(createLinalgToXeGPU(opts));
+  // pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
+  pm.addNestedPass<func::FuncOp>(createConvertLinalgToLoopsPass());
+  pm.addPass(xegpu::createXeGPUFoldAliasOps());
+  pm.addPass(memref::createFoldMemRefAliasOpsPass());
+  pm.addNestedPass<func::FuncOp>(createGpuMapParallelLoopsPass());
+  pm.addNestedPass<func::FuncOp>(createParallelLoopToGpuPass());
+  // imex::InsertGPUAllocsOptions gopts;
+  // std::string opc = "opencl";
+  // gopts.clientAPI = opc;
+  if (getBoolFromEnv("GPU_ALLOC", true)) {
+    std::cout << "Using GPU_ALLOC" << std::endl;
+    pm.addNestedPass<func::FuncOp>(imex::createInsertGPUAllocsPass());
+  } else {
+    std::cout << "Not using GPU_ALLOC" << std::endl;
+  }
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(memref::createNormalizeMemRefsPass());
+  pm.addPass(createGpuKernelOutliningPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(imex::createSetSPIRVCapabilitiesPass());
+  pm.addNestedPass<gpu::GPUModuleOp>(imex::createSetSPIRVAbiAttributePass());
+  pm.addPass(createLowerAffinePass());
+  pm.addPass(imex::createVectorLinearizePass());
+  pm.addNestedPass<gpu::GPUModuleOp>(imex::createConvertXeGPUToVCPass());
+  pm.addPass(createReconcileUnrealizedCastsPass());
+  pm.addPass(imex::createBF16ToGPUPass());
+  pm.addNestedPass<gpu::GPUModuleOp>(createConvertFuncToSPIRVPass());
+  pm.addNestedPass<gpu::GPUModuleOp>(createConvertVectorToSPIRVPass());
+  pm.addPass(imex::createConvertGPUXToSPIRVPass());
+  pm.addNestedPass<spirv::ModuleOp>(spirv::createSPIRVLowerABIAttributesPass());
+  pm.addNestedPass<spirv::ModuleOp>(spirv::createSPIRVUpdateVCEPass());
+  pm.addNestedPass<func::FuncOp>(LLVM::createRequestCWrappersPass());
+  pm.addPass(imex::createSerializeSPIRVPass());
+  pm.addPass(createConvertVectorToSCFPass());
+  pm.addPass(imex::createConvertGPUToGPUXPass());
+  pm.addPass(createConvertSCFToCFPass());
+  pm.addPass(createConvertControlFlowToLLVMPass());
+  pm.addPass(createConvertVectorToLLVMPass());
+  pm.addPass(createConvertIndexToLLVMPass());
+  pm.addPass(createArithToLLVMConversionPass());
+  pm.addPass(createConvertFuncToLLVMPass());
+  pm.addPass(createConvertMathToLLVMPass());
+  pm.addPass(imex::createConvertGPUXToLLVMPass());
+  pm.addPass(createConvertIndexToLLVMPass());
+  pm.addPass(memref::createExpandStridedMetadataPass());
+  pm.addPass(createLowerAffinePass());
+  pm.addPass(createFinalizeMemRefToLLVMConversionPass());
+  pm.addPass(createReconcileUnrealizedCastsPass());
+
+}
+
 void registerCPUPipeline() {
   PassPipelineRegistration<>("gc-cpu-pipeline",
                              "The CPU pipeline for Graph Compiler",
                              populateCPUPipeline);
+}
+
+void registerGPUPipeline() {
+  PassPipelineRegistration<>("gc-gpu-pipeline",
+                             "The GPU pipeline for Graph Compiler",
+                             populateGPUPipeline);
 }
 
 } // namespace mlir::gc

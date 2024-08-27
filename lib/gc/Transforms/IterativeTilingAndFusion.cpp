@@ -696,7 +696,7 @@ defaultTilingOfType(RewriterBase &rewriter, Operation *op,
         std::optional<int64_t> tripCount = mlir::constantTripCount(
             curDomain.offset, curDomain.size, curDomain.stride);
         if (tileDims >= 2 && en > 0) {
-          defaultTileSize[en] = rewriter.getIndexAttr(1);
+          defaultTileSize[en] = rewriter.getIndexAttr(16);
           continue;
         } else if (tripCount) {
           for (auto &ts : tsOrder) {
