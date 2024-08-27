@@ -100,6 +100,16 @@ def GpuToOclGpu : Pass<"gpu-to-oclgpu", "ModuleOp"> {
     Convert the gpu alloc, dealloc, memcpy and launch operations to OclGpuRuntime calls.
   }];
 }
+
+def AddRemoveGpuAddressSpace : Pass<"remove-gpu-addr-space", "ModuleOp"> {
+  let summary = "Arr or remove the gpu address space attribute.";
+  let description = [{
+    Arr or remove the #gpu.address_space attribute to/from the memref types.
+  }];
+  let options = [
+    Option<"remove", "remove", "bool", "false", "Remove the #gpu.address_space attribute">
+  ];
+}
 #endif // GC_USE_IMEX
 
 def IterativeTilingAndFusion : Pass<"iterative-tiling-and-fusion",
