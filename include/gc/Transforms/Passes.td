@@ -52,6 +52,13 @@ def LinalgToXeGPU : Pass<"linalg-to-xegpu", "func::FuncOp"> {
                "DPAS register block sizes MxNxK">,
   ];
 }
+
+def RemoveGpuAddressSpace : Pass<"remove-gpu-addr-space", "ModuleOp"> {
+  let summary = "Remove the #gpu.address_space attribute from the memref types.";
+  let description = [{
+    Remove the #gpu.address_space attribute. This is required before lowering to llvm.
+  }];
+}
 #endif // GC_USE_IMEX
 
 def IterativeTilingAndFusion : Pass<"iterative-tiling-and-fusion",

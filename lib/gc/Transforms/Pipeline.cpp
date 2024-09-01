@@ -35,11 +35,6 @@
 #include <imex/Transforms/Passes.h>
 #endif
 
-#include <cstdlib>  // For std::getenv
-#include <string>
-#include <algorithm> // For std::transform
-#include <iostream>  // For std::cout
-
 #include "gc/Dialect/CPURuntime/Transforms/CPURuntimePasses.h"
 #include "gc/Dialect/Linalgx/LinalgxDialect.h"
 #ifdef GC_HAS_ONEDNN_DIALECT
@@ -53,23 +48,6 @@ namespace mlir::gc {
 void populateCleanUpPasses(mlir::OpPassManager &pm) {
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
-}
-
-bool getBoolFromEnv(const std::string& envVarName, bool defaultValue = false) {
-    const char* envValue = std::getenv(envVarName.c_str());
-
-    // If the environment variable is not set, return false by default
-    if (envValue == nullptr) {
-        return defaultValue;
-    }
-
-    std::string valueStr(envValue);
-    
-    // Convert the string to lower case for comparison
-    std::transform(valueStr.begin(), valueStr.end(), valueStr.begin(), ::tolower);
-
-    // Check for various representations of "true"
-    return (valueStr == "1" || valueStr == "true" || valueStr == "yes" || valueStr == "on");
 }
 
 // linalg + linalgX + tensor
@@ -248,35 +226,22 @@ void populateGPUPipeline(mlir::OpPassManager &pm) {
   pm.addPass(createBufferizationToMemRefPass());
 
   pm.addNestedPass<func::FuncOp>(createForallToParallelLoopPass());
-  std::array<int64_t, 3> data = {8, 16, 16};
-  ArrayRef<int64_t> tile(data);
-  // for (int64_t val : tile) {
-  //     std::cout << val << " ";
-  // }
-  // std::cout << std::endl;
-  LinalgToXeGPUOptions opts{16, 1, tile};
-  pm.addNestedPass<func::FuncOp>(createLinalgToXeGPU(opts));
+  pm.addNestedPass<func::FuncOp>(createLinalgToXeGPU({16, 1, {8, 16, 16}}));
   // pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
   pm.addNestedPass<func::FuncOp>(createConvertLinalgToLoopsPass());
   pm.addPass(xegpu::createXeGPUFoldAliasOps());
   pm.addPass(memref::createFoldMemRefAliasOpsPass());
   pm.addNestedPass<func::FuncOp>(createGpuMapParallelLoopsPass());
   pm.addNestedPass<func::FuncOp>(createParallelLoopToGpuPass());
-  // imex::InsertGPUAllocsOptions gopts;
-  // std::string opc = "opencl";
-  // gopts.clientAPI = opc;
-  if (getBoolFromEnv("GPU_ALLOC", true)) {
-    std::cout << "Using GPU_ALLOC" << std::endl;
-    pm.addNestedPass<func::FuncOp>(imex::createInsertGPUAllocsPass());
-  } else {
-    std::cout << "Not using GPU_ALLOC" << std::endl;
-  }
+  pm.addNestedPass<func::FuncOp>(
+      imex::createInsertGPUAllocsPass("opencl", false, true));
   pm.addPass(createCanonicalizerPass());
   pm.addPass(memref::createNormalizeMemRefsPass());
   pm.addPass(createGpuKernelOutliningPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(imex::createSetSPIRVCapabilitiesPass());
-  pm.addNestedPass<gpu::GPUModuleOp>(imex::createSetSPIRVAbiAttributePass());
+  pm.addNestedPass<gpu::GPUModuleOp>(
+      imex::createSetSPIRVAbiAttributePass("opencl"));
   pm.addPass(createLowerAffinePass());
   pm.addPass(imex::createVectorLinearizePass());
   pm.addNestedPass<gpu::GPUModuleOp>(imex::createConvertXeGPUToVCPass());
@@ -296,6 +261,7 @@ void populateGPUPipeline(mlir::OpPassManager &pm) {
   pm.addPass(createConvertVectorToLLVMPass());
   pm.addPass(createConvertIndexToLLVMPass());
   pm.addPass(createArithToLLVMConversionPass());
+  pm.addPass(createRemoveGpuAddressSpace());
   pm.addPass(createConvertFuncToLLVMPass());
   pm.addPass(createConvertMathToLLVMPass());
   pm.addPass(imex::createConvertGPUXToLLVMPass());
@@ -304,7 +270,6 @@ void populateGPUPipeline(mlir::OpPassManager &pm) {
   pm.addPass(createLowerAffinePass());
   pm.addPass(createFinalizeMemRefToLLVMConversionPass());
   pm.addPass(createReconcileUnrealizedCastsPass());
-
 }
 
 void registerCPUPipeline() {
