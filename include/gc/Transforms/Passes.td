@@ -101,7 +101,7 @@ def GpuToOclGpu : Pass<"gpu-to-oclgpu", "ModuleOp"> {
   }];
 }
 
-def AddRemoveGpuAddressSpace : Pass<"remove-gpu-addr-space", "ModuleOp"> {
+def AddRemoveGpuAddressSpace : Pass<"add-remove-gpu-addr-space", "ModuleOp"> {
   let summary = "Arr or remove the gpu address space attribute.";
   let description = [{
     Arr or remove the #gpu.address_space attribute to/from the memref types.

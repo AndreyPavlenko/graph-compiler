@@ -19,4 +19,4 @@ target_include_directories(GcOpenclRuntime PRIVATE
     )
 
 message(STATUS "OpenCL Libraries: ${OpenCL_LIBRARIES}")
-target_link_libraries(GcOpenclRuntime PUBLIC ${OpenCL_LIBRARIES})
+target_link_libraries(GcOpenclRuntime PUBLIC GcInterface ${OpenCL_LIBRARIES})

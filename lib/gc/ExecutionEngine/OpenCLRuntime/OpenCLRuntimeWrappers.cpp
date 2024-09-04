@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #define CL_TARGET_OPENCL_VERSION 300
+#include "gc/ExecutionEngine/OpenCLRuntime/OpenCLRuntimeWrappers.h"
 #include <CL/cl.h>
 #include <CL/cl_ext.h>
 #include <array>
@@ -16,13 +17,8 @@
 #include <cstdio>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <vector>
-
-#ifdef _WIN32
-#define OCL_RUNTIME_EXPORT __declspec(dllexport)
-#else
-#define OCL_RUNTIME_EXPORT __attribute__((visibility("default")))
-#endif // _WIN32
 
 namespace {
 
@@ -49,7 +45,8 @@ constexpr char DeviceMemAllocName[] = "clDeviceMemAllocINTEL";
 constexpr char SharedMemAllocName[] = "clSharedMemAllocINTEL";
 constexpr char MemBlockingFreeName[] = "clMemBlockingFreeINTEL";
 constexpr char SetKernelArgMemPointerName[] = "clSetKernelArgMemPointerINTEL";
-static constexpr char EnqueueMemcpyName[] = "clEnqueueMemcpyINTEL";
+constexpr char EnqueueMemcpyName[] = "clEnqueueMemcpyINTEL";
+constexpr char GetMemAllocInfoINTEL[] = "clGetMemAllocInfoINTEL";
 
 void *queryCLExtFunc(cl_platform_id CurPlatform, const char *FuncName) {
   void *ret = clGetExtensionFunctionAddressForPlatform(CurPlatform, FuncName);
@@ -74,6 +71,7 @@ struct CLExtTable {
   clMemBlockingFreeINTEL_fn blockingFree;
   clSetKernelArgMemPointerINTEL_fn setKernelArgMemPtr;
   clEnqueueMemcpyINTEL_fn enqueueMemcpy;
+  clGetMemAllocInfoINTEL_fn getMemAllocInfo;
   CLExtTable() = default;
   CLExtTable(cl_platform_id plat) {
     allocDev =
@@ -86,6 +84,8 @@ struct CLExtTable {
         plat, SetKernelArgMemPointerName);
     enqueueMemcpy =
         (clEnqueueMemcpyINTEL_fn)queryCLExtFunc(plat, EnqueueMemcpyName);
+    getMemAllocInfo =
+        (clGetMemAllocInfoINTEL_fn)queryCLExtFunc(plat, GetMemAllocInfoINTEL);
   }
 };
 
@@ -193,6 +193,8 @@ struct GPUCLQUEUE {
   CLExtTable *ext_table_ = nullptr;
   std::vector<cl_program> programs_;
   std::vector<cl_kernel> kernels_;
+
+  GPUCLQUEUE() = default;
 
   GPUCLQUEUE(cl_device_type *device, cl_context context,
              cl_command_queue queue) {
@@ -325,6 +327,17 @@ static cl_kernel getKernel(GPUCLQUEUE *queue, cl_program program,
   return kernel;
 }
 
+static bool isUsmPointer(GPUCLQUEUE *queue, void *ptr) {
+  auto func = queue->ext_table_
+                ? queue->ext_table_->getMemAllocInfo
+                : (clGetMemAllocInfoINTEL_fn)queryCLExtFunc(
+                    queue->device_, GetMemAllocInfoINTEL);
+  cl_mem_info_intel allocType;
+  return (func(queue->context_, ptr, CL_MEM_ALLOC_TYPE_INTEL, sizeof(allocType),
+               &allocType, nullptr) == CL_SUCCESS)
+         && (allocType != CL_MEM_TYPE_UNKNOWN_INTEL);
+}
+
 template <typename NumArgsFuncT, typename GetParamFuncT>
 static void launchKernel(GPUCLQUEUE *queue, cl_kernel kernel, size_t gridX,
                          size_t gridY, size_t gridZ, size_t blockX,
@@ -345,11 +358,15 @@ static void launchKernel(GPUCLQUEUE *queue, cl_kernel kernel, size_t gridX,
     auto [paramData, paramSize] = fnGetParamFunc(i);
     if (paramSize == sizeof(void *) && name == CL_KERNEL_ARG_ADDRESS_GLOBAL) {
       // pass the value of the pointer instead of the pointer of the pointer
-      CL_SAFE_CALL(
-          clSetKernelArgMemPointerINTEL(kernel, i, *(void **)paramData));
-    } else {
-      CL_SAFE_CALL(clSetKernelArg(kernel, i, paramSize, paramData));
+      paramData = *(void **)paramData;
+      if (isUsmPointer(queue, paramData)) {
+        CL_SAFE_CALL(
+            clSetKernelArgMemPointerINTEL(kernel, i, paramData));
+        continue;
+      }
     }
+
+    CL_SAFE_CALL(clSetKernelArg(kernel, i, paramSize, paramData));
   }
   if (sharedMemBytes) {
     CL_SAFE_CALL(clSetKernelArg(kernel, paramsCount, sharedMemBytes, nullptr));
@@ -360,7 +377,31 @@ static void launchKernel(GPUCLQUEUE *queue, cl_kernel kernel, size_t gridX,
                                       globalSize, localSize, 0, NULL, NULL));
 }
 
+thread_local GPUCLQUEUE threadLocalQueue_;
+
+extern "C" OCL_RUNTIME_EXPORT void gpuSetThreadLocalQueue(
+    cl_command_queue queue) {
+  threadLocalQueue_.queue_ = queue;
+  if (queue) {
+    CL_SAFE_CALL(
+        clGetCommandQueueInfo(queue, CL_QUEUE_CONTEXT, sizeof(cl_context), &
+          threadLocalQueue_.context_, nullptr));
+    CL_SAFE_CALL(
+        clGetCommandQueueInfo(queue, CL_QUEUE_DEVICE, sizeof(cl_device_id), &
+          threadLocalQueue_.device_, nullptr));
+    threadLocalQueue_.ext_table_ = CLExtTableCache::get(
+        threadLocalQueue_.device_);
+  } else {
+    threadLocalQueue_.programs_.clear();
+    threadLocalQueue_.kernels_.clear();
+  }
+}
+
 static GPUCLQUEUE *getDefaultQueue() {
+  if (threadLocalQueue_.queue_) {
+    return &threadLocalQueue_;
+  }
+
   static GPUCLQUEUE defaultq(static_cast<cl_device_id>(nullptr), nullptr,
                              nullptr);
   return &defaultq;
