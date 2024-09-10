@@ -93,6 +93,13 @@ def LinalgToXeGPU : Pass<"linalg-to-xegpu", "func::FuncOp"> {
                "DPAS register block sizes MxNxK">,
   ];
 }
+
+def GpuToOclGpu : Pass<"gpu-to-oclgpu", "ModuleOp"> {
+  let summary = "Convert the GPU operations to OclGpuRuntime calls.";
+  let description = [{
+    Convert the gpu alloc, dealloc, memcpy and launch operations to OclGpuRuntime calls.
+  }];
+}
 #endif // GC_USE_IMEX
 
 def IterativeTilingAndFusion : Pass<"iterative-tiling-and-fusion",

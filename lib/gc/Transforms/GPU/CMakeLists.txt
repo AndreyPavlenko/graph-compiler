@@ -1,4 +1,5 @@
 gc_add_mlir_library(GcGpuPasses
+  GpuToOclGpu.cpp
   LinalgToXeGPU.cpp
 
   DEPENDS
