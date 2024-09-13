@@ -124,7 +124,7 @@ void populateBufferizationPasses(mlir::OpPassManager &pm) {
   pm.addPass(bufferization::createDropEquivalentBufferResultsPass());
   pm.addNestedPass<func::FuncOp>(bufferization::createPromoteBuffersToStackPass(
       /*maxAllocSizeInBytes*/ UINT_MAX,
-      /*maxRankOfAllocatedMemRef*/ 8));
+                              /*maxRankOfAllocatedMemRef*/ 8));
   mlir::bufferization::BufferDeallocationPipelineOptions deallocOption;
   bufferization::buildBufferDeallocationPipeline(pm, deallocOption);
   pm.addPass(createBufferizationToMemRefPass());
@@ -247,8 +247,10 @@ void populateGPUPipeline(mlir::OpPassManager &pm) {
   pm.addPass(memref::createFoldMemRefAliasOpsPass());
   pm.addNestedPass<func::FuncOp>(createGpuMapParallelLoopsPass());
   pm.addNestedPass<func::FuncOp>(createParallelLoopToGpuPass());
+  pm.addPass(createAddRemoveGpuAddressSpace());
   pm.addNestedPass<func::FuncOp>(
-      imex::createInsertGPUAllocsPass("opencl", false, true));
+      imex::createInsertGPUAllocsPass("opencl", false, false));
+  pm.addPass(createAddRemoveGpuAddressSpace({true}));
   pm.addPass(createCanonicalizerPass());
   pm.addPass(memref::createNormalizeMemRefsPass());
   pm.addPass(createGpuKernelOutliningPass());
@@ -269,7 +271,13 @@ void populateGPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<func::FuncOp>(LLVM::createRequestCWrappersPass());
   pm.addPass(imex::createSerializeSPIRVPass());
   pm.addPass(createConvertVectorToSCFPass());
-  pm.addPass(imex::createConvertGPUToGPUXPass());
+  // pm.addPass(imex::createConvertGPUToGPUXPass());
+  // pm.addPass(createPrintIRPass());
+  // // pm.addPass(createAddRemoveGpuAddressSpace({true}));
+  // pm.addPass(createGpuToGpuOcl());
+  // pm.addPass(createPrintIRPass());
+  // pm.addPass(imex::createConvertGPUToGPUXPass());
+
   pm.addPass(createConvertSCFToCFPass());
   pm.addPass(createConvertControlFlowToLLVMPass());
   pm.addPass(createConvertVectorToLLVMPass());
@@ -278,7 +286,12 @@ void populateGPUPipeline(mlir::OpPassManager &pm) {
   pm.addPass(createAddRemoveGpuAddressSpace({true}));
   pm.addPass(createConvertFuncToLLVMPass());
   pm.addPass(createConvertMathToLLVMPass());
-  pm.addPass(imex::createConvertGPUXToLLVMPass());
+  // pm.addPass(imex::createConvertGPUXToLLVMPass());
+
+  // pm.addPass(createPrintIRPass());
+  pm.addPass(createGpuToGpuOcl());
+  // pm.addPass(createPrintIRPass());
+
   pm.addPass(createConvertIndexToLLVMPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
   pm.addPass(createLowerAffinePass());

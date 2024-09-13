@@ -94,10 +94,10 @@ def LinalgToXeGPU : Pass<"linalg-to-xegpu", "func::FuncOp"> {
   ];
 }
 
-def GpuToOclGpu : Pass<"gpu-to-oclgpu", "ModuleOp"> {
-  let summary = "Convert the GPU operations to OclGpuRuntime calls.";
+def GpuToGpuOcl : Pass<"gpu-to-gpuocl", "ModuleOp"> {
+  let summary = "Convert the GPU operations to GpuOclRuntime calls.";
   let description = [{
-    Convert the gpu alloc, dealloc, memcpy and launch operations to OclGpuRuntime calls.
+    Convert the gpu alloc, dealloc, memcpy and launch operations to GpuOclRuntime calls.
   }];
 }
 

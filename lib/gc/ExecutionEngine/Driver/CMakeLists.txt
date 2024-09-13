@@ -31,13 +31,18 @@ if(GC_ENABLE_IMEX)
   list(APPEND GC_PASSES GcGpuPasses)
 endif()
 
+set(GC_JIT_WRAPPER_LIBS
+  ${MLIR_LINK_COMPONENTS}
+  ${dialect_libs}
+  ${conversion_libs}
+  ${GC_PASSES}
+  GcAnalysis
+)
+set_property(GLOBAL APPEND PROPERTY GC_JIT_WRAPPER_LIBS ${GC_JIT_WRAPPER_LIBS})
+
 gc_add_mlir_library(GcJitWrapper
   Driver.cpp
 
   LINK_LIBS PUBLIC
-    ${MLIR_LINK_COMPONENTS}
-    ${dialect_libs}
-    ${conversion_libs}
-    ${GC_PASSES}
-    GcAnalysis
-  )
+    ${GC_JIT_WRAPPER_LIBS}
+)
