@@ -112,6 +112,22 @@ def GpuToGpuOcl : Pass<"gpu-to-gpuocl", "ModuleOp"> {
            "Call finish() after each kernel launch.">
     ];
 }
+
+def GpuTilingAndFusion : Pass<"gpu-tiling", "func::FuncOp"> {
+  let summary = "GPU tiling and fusion path.";
+  let description = [{
+    This path creates 2 nested loops for linalg operations, that are converted to gpu.launch.
+    The outer loop is mapped to to the grid sizes and the inner loop is mapped to the block sizes.
+  }];
+  let options = [
+    Option<"euMem", "eu-mem", "size_t",
+           /*default=*/"131072",
+           "Execution Unit cache size.">,
+    Option<"euThreads", "eu-threads", "size_t",
+           /*default=*/"8",
+           "Number of threads per EU.">
+    ];
+}
 #endif // GC_USE_IMEX
 
 def IterativeTilingAndFusion : Pass<"iterative-tiling-and-fusion",
