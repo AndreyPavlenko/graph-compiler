@@ -26,6 +26,7 @@ constexpr char GPU_OCL_MOD_DESTRUCTOR[] = "gcGpuOclModuleDestructor";
 #include <unordered_set>
 #include <vector>
 
+#define CL_TARGET_OPENCL_VERSION 300
 #include <CL/cl.h>
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -407,7 +408,7 @@ template <unsigned N = 64> struct DynamicExecutor : OclModuleExecutorBase<N> {
 
         SmallVector<int64_t> expectedStrides;
         if (int64_t expectedOffset; !failed(
-                getStridesAndOffset(type, expectedStrides, expectedOffset))) {
+                type.getStridesAndOffset(expectedStrides, expectedOffset))) {
           assert(expectedOffset == offset);
           for (size_t i = 0; i < rank; i++) {
             assert(expectedStrides[i] == strides[i]);

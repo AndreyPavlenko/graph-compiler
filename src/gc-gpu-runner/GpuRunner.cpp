@@ -16,7 +16,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "gc/ExecutionEngine/Driver/Driver.h"
 #include "gc/ExecutionEngine/GPURuntime/GpuOclRuntime.h"
 #include "gc/Transforms/Passes.h"
 #include "gc/Utils/Error.h"
@@ -137,7 +136,7 @@ int main(int argc, char **argv) {
 
   auto srcMgr = std::make_shared<llvm::SourceMgr>();
   srcMgr->AddNewSourceBuffer(std::move(file), SMLoc());
-  MLIRContext mlirCtx{gc::initCompilerAndGetDialects()};
+  MLIRContext mlirCtx{gc::getDialectRegistry()};
   auto mlirMod = parseSourceFile<ModuleOp>(srcMgr, {&mlirCtx});
   findFunc(opts, *mlirMod);
 
@@ -154,11 +153,7 @@ int main(int argc, char **argv) {
         gc::GPUPipelineOptions pipelineOpts;
         pipelineOpts.isUsmArgs = false;
         pipelineOpts.callFinish = true;
-#ifdef GC_USE_IMEX
-        populateIMEXPipeline(pm, pipelineOpts);
-#else
         populateGPUPipeline(pm, pipelineOpts);
-#endif
       };
 
   gc::gpu::OclModuleBuilder builder{mlirMod, builderOpts};

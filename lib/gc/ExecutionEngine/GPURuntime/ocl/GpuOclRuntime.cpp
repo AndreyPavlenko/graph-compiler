@@ -5,18 +5,20 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-
-#include <CL/cl_ext.h>
+#include <variant>
 
 #include "gc/ExecutionEngine/GPURuntime/GpuOclRuntime.h"
+#include <CL/cl_ext.h>
+
 #include "gc/Transforms/Passes.h"
 #include "gc/Utils/Error.h"
 #include "gc/Utils/Log.h"
+#include "gc/Utils/Transform.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/Support/Error.h"
 
-#include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
@@ -51,6 +53,41 @@ namespace mlir::gc::gpu {
       reportClErr(_cl_check_err, __VA_ARGS__);                                 \
     }                                                                          \
   } while (0)
+
+#define clGetDevInfo(type, dev, prop) clGetDeviceInfo<type>(dev, prop, #prop)
+template <typename T>
+auto clGetDeviceInfo(cl_device_id dev, cl_device_info prop, const char *name) {
+  if constexpr (std::is_integral_v<T>) {
+    T v;
+    CL_CHECKR(clGetDeviceInfo(dev, prop, sizeof(T), &v, nullptr),
+              "Failed to get the device property ", name);
+    gcLogD("Device property ", name, "=", v);
+    return v;
+  } else if constexpr (std::is_convertible_v<T, StringRef>) {
+    size_t v;
+    CL_CHECKR(clGetDeviceInfo(dev, prop, 0, nullptr, &v),
+              "Failed to get the size of device property ", name);
+    std::string value(v, '\0');
+    CL_CHECKR(clGetDeviceInfo(dev, prop, v, value.data(), nullptr),
+              "Failed to get the device property ", name);
+    value.erase(value.find_last_not_of('\0') + 1);
+    gcLogD("Device property ", name, "=", value);
+    return value;
+  } else if constexpr (std::is_convertible_v<
+                           T, ArrayRef<typename T::value_type>>) {
+    size_t v;
+    CL_CHECKR(clGetDeviceInfo(dev, prop, 0, nullptr, &v),
+              "Failed to get the size of device property ", name);
+    T values(v / sizeof(typename T::value_type));
+    CL_CHECKR(clGetDeviceInfo(dev, prop, v, values.data(), nullptr),
+              "Failed to get the device property ", name);
+    gcLogD("Device property ", name, "=",
+           llvm::formatv("{0:$[,]}",
+                         llvm::make_range(values.begin(), values.end()))
+               .str());
+    return values;
+  }
+}
 
 // cl_ext function pointers
 struct OclRuntime::Ext : OclDevCtxPair {
@@ -353,8 +390,8 @@ OclRuntime::gcIntelDevices(size_t max) {
     cl_uint numDevices;
     err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
     if (err != CL_SUCCESS) {
-      gcLogE("Failed to get the number of devices on the platform.", platform,
-             " Error: ", err);
+      gcLogE("Failed to get the number of devices on the platform ", platform,
+             ". Error: ", err);
       continue;
     }
     if (numDevices == 0) {
@@ -669,8 +706,7 @@ OclModule::~OclModule() {
 // buffers. The function will call the original function with the context,
 // buffers and the offset/shape/strides, statically created from the
 // memref descriptor.
-StringRef createStaticMain(OpBuilder &builder, ModuleOp &module,
-                           const StringRef &funcName,
+StringRef createStaticMain(ModuleOp &module, const StringRef &funcName,
                            const ArrayRef<Type> argTypes) {
   auto mainFunc = module.lookupSymbol<LLVM::LLVMFuncOp>(funcName);
   if (!mainFunc) {
@@ -685,6 +721,7 @@ StringRef createStaticMain(OpBuilder &builder, ModuleOp &module,
                 "' must have an least 3 arguments.");
   }
 
+  OpBuilder builder(module.getContext());
   auto i64Type = builder.getI64Type();
   auto ptrType = LLVM::LLVMPointerType::get(builder.getContext());
 
@@ -718,7 +755,7 @@ StringRef createStaticMain(OpBuilder &builder, ModuleOp &module,
       auto offsetPtr = constArgs.end();
       constArgs.emplace_back(0);
       constArgs.append(shape.begin(), shape.end());
-      if (failed(getStridesAndOffset(type, constArgs, *offsetPtr))) {
+      if (failed(type.getStridesAndOffset(constArgs, *offsetPtr))) {
         gcLogD("Failed to get strides and offset of arg", i,
                " of the function ", funcName.begin());
         return {};
@@ -736,9 +773,9 @@ StringRef createStaticMain(OpBuilder &builder, ModuleOp &module,
       mainFunc.getNumResults() ? mainFunc->getResult(0).getType()
                                : LLVM::LLVMVoidType::get(builder.getContext()),
       {ptrType, ptrType});
+  builder.setInsertionPointToEnd(module.getBody());
   auto newFunc =
-      OpBuilder::atBlockEnd(module.getBody())
-          .create<LLVM::LLVMFuncOp>(loc, "gcGpuOclStaticMain", newFuncType);
+      LLVM::LLVMFuncOp::create(builder, loc, "gcGpuOclStaticMain", newFuncType);
   auto &entryBlock = *newFunc.addEntryBlock(builder);
   builder.setInsertionPointToStart(&entryBlock);
   Value arrayPtr = entryBlock.getArgument(1);
@@ -749,8 +786,9 @@ StringRef createStaticMain(OpBuilder &builder, ModuleOp &module,
       return v->second;
     }
     return constMap
-        .emplace(i, builder.create<LLVM::ConstantOp>(
-                        loc, i64Type, builder.getIntegerAttr(i64Type, i)))
+        .emplace(i,
+                 LLVM::ConstantOp::create(builder, loc, i64Type,
+                                          builder.getIntegerAttr(i64Type, i)))
         .first->second;
   };
   Value zero = createConst(0);
@@ -761,10 +799,10 @@ StringRef createStaticMain(OpBuilder &builder, ModuleOp &module,
   for (unsigned i = 0, j = 0; i < nargs; i++) {
     if (i != 0) {
       arrayPtr =
-          builder.create<LLVM::GEPOp>(loc, ptrType, ptrType, arrayPtr, one);
+          LLVM::GEPOp::create(builder, loc, ptrType, ptrType, arrayPtr, one);
     }
 
-    auto ptr = builder.create<LLVM::LoadOp>(loc, ptrType, arrayPtr);
+    auto ptr = LLVM::LoadOp::create(builder, loc, ptrType, arrayPtr);
     args.emplace_back(ptr);
     args.emplace_back(ptr);
     args.emplace_back(createConst(constArgs[j++]));
@@ -781,8 +819,8 @@ StringRef createStaticMain(OpBuilder &builder, ModuleOp &module,
   args.emplace_back(oclCtxArg);
   args.emplace_back(zero);
 
-  auto call = builder.create<LLVM::CallOp>(loc, mainFunc, args);
-  builder.create<LLVM::ReturnOp>(loc, call.getResults());
+  auto call = LLVM::CallOp::create(builder, loc, mainFunc, args);
+  LLVM::ReturnOp::create(builder, loc, call.getResults());
   return newFunc.getName();
 }
 
@@ -860,44 +898,6 @@ OclModuleBuilder::build(cl_device_id device, cl_context context) {
 
 llvm::Expected<std::shared_ptr<const OclModule>>
 OclModuleBuilder::build(const OclRuntime::Ext &ext) {
-  auto ctx = mlirModule.getContext();
-  ctx->getOrLoadDialect<DLTIDialect>();
-  ctx->getOrLoadDialect<LLVM::LLVMDialect>();
-  OpBuilder builder(ctx);
-  DataLayoutEntryInterface dltiAttrs[6];
-
-  {
-    struct DevInfo {
-      cl_device_info key;
-      const char *attrName;
-    };
-    DevInfo devInfo[]{
-        {CL_DEVICE_MAX_COMPUTE_UNITS, "num_exec_units"},
-        {CL_DEVICE_NUM_EUS_PER_SUB_SLICE_INTEL, "num_exec_units_per_slice"},
-        {CL_DEVICE_NUM_THREADS_PER_EU_INTEL, "num_threads_per_eu"},
-        {CL_DEVICE_LOCAL_MEM_SIZE, "local_mem_size"},
-    };
-
-    unsigned i = 0;
-    for (auto &[key, attrName] : devInfo) {
-      int64_t value = 0;
-      CL_CHECK(
-          clGetDeviceInfo(ext.device, key, sizeof(cl_ulong), &value, nullptr),
-          "Failed to get the device property ", attrName);
-      gcLogD("Device property ", attrName, "=", value);
-      dltiAttrs[i++] =
-          DataLayoutEntryAttr::get(ctx, builder.getStringAttr(attrName),
-                                   builder.getI64IntegerAttr(value));
-    }
-
-    // There is no a corresponding property in the OpenCL API, using the
-    // hardcoded value.
-    // TODO: Get the real value.
-    dltiAttrs[i] = DataLayoutEntryAttr::get(
-        ctx, builder.getStringAttr("max_vector_op_width"),
-        builder.getI64IntegerAttr(512));
-  }
-
   OclRuntime rt(ext);
   auto expectedQueue = rt.createQueue();
   CHECKE(expectedQueue, "Failed to create queue!");
@@ -910,7 +910,6 @@ OclModuleBuilder::build(const OclRuntime::Ext &ext) {
   ModuleOp mod;
   StringRef staticMain;
   std::unique_ptr<ExecutionEngine> eng;
-  auto devStr = builder.getStringAttr("GPU" /* device ID*/);
   ExecutionEngineOptions opts;
   opts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
   opts.enableObjectDump = enableObjectDump;
@@ -920,29 +919,29 @@ OclModuleBuilder::build(const OclRuntime::Ext &ext) {
   opts.enablePerfNotificationListener = false;
 #endif
 
+  auto dev = ext.device;
+  GpuDevicePropsOptions devProps;
+  devProps.id = clGetDevInfo(cl_uint, dev, CL_DEVICE_ID_INTEL);
+  devProps.name = clGetDevInfo(std::string, dev, CL_DEVICE_NAME);
+  devProps.maxWgSize = clGetDevInfo(size_t, dev, CL_DEVICE_MAX_WORK_GROUP_SIZE);
+  devProps.sgSizes =
+      clGetDevInfo(SmallVector<size_t>, dev, CL_DEVICE_SUB_GROUP_SIZES_INTEL);
+
   // Build the module and check the kernels workgroup size. If the workgroup
   // size is different, rebuild the module with the new size.
-  for (size_t wgSize = 64, maxSize = std::numeric_limits<size_t>::max();;) {
-    dltiAttrs[sizeof(dltiAttrs) / sizeof(DataLayoutEntryInterface) - 1] =
-        DataLayoutEntryAttr::get(
-            ctx, builder.getStringAttr("max_work_group_size"),
-            builder.getI64IntegerAttr(static_cast<int64_t>(wgSize)));
-    TargetDeviceSpecInterface devSpec =
-        TargetDeviceSpecAttr::get(ctx, dltiAttrs);
-    auto sysSpec =
-        TargetSystemSpecAttr::get(ctx, ArrayRef(std::pair(devStr, devSpec)));
+  for (size_t wgSize = devProps.maxWgSize;;) {
     mod = mlirModule.clone();
-    mod.getOperation()->setAttr("#dlti.sys_spec", sysSpec);
-    PassManager pm{ctx};
+    // setGpuDeviceAttrs(mod, dltiAttrs);
+    PassManager pm{mod.getContext()};
     pipeline(pm);
     CHECK(!pm.run(mod).failed(), "GPU pipeline failed!");
-    staticMain = createStaticMain(builder, mod, funcName, argTypes);
+    staticMain = createStaticMain(mod, funcName, argTypes);
     auto expectedEng = ExecutionEngine::create(mod, opts);
     CHECKE(expectedEng, "Failed to create ExecutionEngine!");
     expectedEng->get()->registerSymbols(OclRuntime::Exports::symbolMap);
 
     // Find all kernels and query the workgroup size
-    size_t minSize = maxSize;
+    size_t minSize = wgSize;
     mod.walk<>([&](LLVM::LLVMFuncOp func) {
       auto name = func.getName();
       if (!name.starts_with("createGcGpuOclKernel_")) {
@@ -958,11 +957,10 @@ OclModuleBuilder::build(const OclRuntime::Ext &ext) {
           reinterpret_cast<Kernel *(*)(OclContext *)>(fn.get())(&oclCtx);
 
       if (kernel->kernel == nullptr) {
-        maxSize = wgSize / 2;
-        if (maxSize == 0) {
+        minSize = std::min(minSize, wgSize / 2);
+        if (minSize == 0) {
           gcReportErr("Failed to build the kernel.");
         }
-        minSize = maxSize;
         return WalkResult::interrupt();
       }
 
@@ -978,7 +976,7 @@ OclModuleBuilder::build(const OclRuntime::Ext &ext) {
       return WalkResult::skip();
     });
 
-    if (minSize == wgSize || minSize == std::numeric_limits<size_t>::max()) {
+    if (minSize == wgSize) {
       eng = std::move(*expectedEng);
       break;
     }
@@ -986,6 +984,7 @@ OclModuleBuilder::build(const OclRuntime::Ext &ext) {
     destroyKernels(expectedEng.get());
     gcLogD("Changing the workgroup size from ", wgSize, " to ", minSize);
     wgSize = minSize;
+    devProps.maxWgSize = wgSize;
   }
 
   if (printIr) {

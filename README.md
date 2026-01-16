@@ -30,9 +30,9 @@ cmake --build build --target install
 ```
 
 Notes
- * It is recommended to add optional options `-DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON` to the command `cmake -G Ninja llvm ...` above **if you are building for CPU only**. These will enable the build of LLVM/MLIR dynamic libraries and let MLIR/LLVM tools link to them, to reduce the installed binary size of LLVM/MLIR. These options also enable the `GC_DEV_LINK_LLVM_DYLIB` option of graph-compiler repo (see below).
+ * It is recommended to add optional options `-DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON` to the command `cmake -G Ninja llvm ...` above **if you are building for CPU only**. These will enable the build of LLVM/MLIR dynamic libraries and let MLIR/LLVM tools link to them, to reduce the installed binary size of LLVM/MLIR. These options also enable the `GC_DYLINK` option of graph-compiler repo (see below).
  * The option `-DLLVM_INSTALL_GTEST=ON` is optional, if the tests of graph-compiler are disabled (see `GC_ENABLE_TEST` below).
- * If you would like to enable GPU components of Graph Compiler, please make sure to statically link Graph Compiler and LLVM(MLIR). It is a known issue that LLVM shared library cannot be linked together with IGC (Intel's low level GPU compiler). Make sure `LLVM_BUILD_LLVM_DYLIB` and `LLVM_LINK_LLVM_DYLIB` are `OFF` (they are off by default). Also make sure Graph Compiler's cmake option `GC_DEV_LINK_LLVM_DYLIB` is `OFF` when configuring Graph Compiler (see below).
+ * If you would like to enable GPU components of Graph Compiler, please make sure to statically link Graph Compiler and LLVM(MLIR). It is a known issue that LLVM shared library cannot be linked together with IGC (Intel's low level GPU compiler). Make sure `LLVM_BUILD_LLVM_DYLIB` and `LLVM_LINK_LLVM_DYLIB` are `OFF` (they are off by default). Also make sure Graph Compiler's cmake option `GC_DYLINK` is `OFF` when configuring Graph Compiler (see below).
 * If you would like to enable [`BenchGC`](docs/benchgc_overview.md) or [`MLIR Binding`](python/README.md), please confirm to add options
  ``-DPython3_EXECUTABLE=`which python3` -DMLIR_ENABLE_BINDINGS_PYTHON=ON``.
 
@@ -74,8 +74,9 @@ Graph Compiler supports the following build-time options.
 |:--------------------------|:---------------------------------------|:----------------------------------------------------------------|
 | GC_ENABLE_LEGACY          | **ON**, OFF                            | Controls building the legacy graph-compiler component           |
 | GC_ENABLE_TEST            | **ON**, OFF                            | Controls building the tests                                     |
-| GC_DEV_LINK_LLVM_DYLIB    | ON, **OFF**                            | Controls dynamic link LLVM/MLIR libraries, mainly for developer |
+| GC_DYLINK    | ON, **OFF**                            | Controls dynamic link LLVM/MLIR libraries, mainly for developer |
 | GC_ENABLE_BINDINGS_PYTHON | **ON**, OFF                            | Controls building the Python API                                |
 | GC_ENABLE_IMEX            | ON, **OFF**                            | Whether to enable the IMEX components                           |
-| GC_ENABLE_GPU             | ON, **OFF**                            | Whether to enable the GPU tools and components                            |
+| GC_ENABLE_GPU             | ON, **OFF**                            | Whether to enable the GPU tools and components                  |
+| GC_ENABLE_CPU             | **ON**, OFF                            | Whether to enable the CPU tools and components                  |
 
